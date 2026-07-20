@@ -1,0 +1,21 @@
+services:
+  command-preflight-server:
+    build: .
+    restart: unless-stopped
+    command:
+      - --listen
+      - ${COMMAND_PREFLIGHT_BIND:-0.0.0.0:8787}
+      - --data
+      - ${COMMAND_PREFLIGHT_DATA:-/data/knowledge.json}
+      - --allow-report=${COMMAND_PREFLIGHT_ALLOW_REPORT:-false}
+      - --report-token=${COMMAND_PREFLIGHT_REPORT_TOKEN:-}
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ${COMMAND_PREFLIGHT_DATA_VOLUME:-command-preflight-data}:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+
+volumes:
+  command-preflight-data:

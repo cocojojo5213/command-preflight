@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - name: Build archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            asset="command-preflight_${os}_${arch}"
+            output="dist/${asset}"
+            suffix=""
+            if [ "$os" = windows ]; then suffix=".exe"; fi
+            GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.buildVersion=${version}" -o "${output}/command-preflight${suffix}" ./cmd/command-preflight
+            if [ "$os" = windows ]; then
+              (cd "$output" && zip -q "../${asset}.zip" "command-preflight${suffix}")
+            else
+              tar -czf "dist/${asset}.tar.gz" -C "$output" command-preflight
+            fi
+            rm -rf "$output"
+          done
+          (cd dist && sha256sum command-preflight_*.tar.gz command-preflight_*.zip > checksums.txt)
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

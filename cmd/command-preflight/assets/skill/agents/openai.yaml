@@ -1,0 +1,4 @@
+interface:
+  display_name: "Command Preflight"
+  short_description: "Catch shell, path, and CLI retry mistakes"
+  default_prompt: "Use $command-preflight to preflight this non-trivial command before running it."
