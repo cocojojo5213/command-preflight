@@ -16,17 +16,53 @@ func main() {
 	flags := flag.NewFlagSet("command-preflight-server", flag.ExitOnError)
 	listen := flags.String("listen", envOrDefault("COMMAND_PREFLIGHT_BIND", "127.0.0.1:8787"), "HTTP listen address")
 	data := flags.String("data", envOrDefault("COMMAND_PREFLIGHT_DATA", "./data/knowledge.json"), "JSON knowledge store path; empty disables persistence")
-	allowReport := flags.Bool("allow-report", envBool("COMMAND_PREFLIGHT_ALLOW_REPORT", false), "enable authenticated PUT reports")
-	reportToken := flags.String("report-token", os.Getenv("COMMAND_PREFLIGHT_REPORT_TOKEN"), "Bearer token required when reporting is enabled")
+	allowReport := flags.Bool("allow-report", envBool("COMMAND_PREFLIGHT_ALLOW_REPORT", false), "enable the opt-in public report queue")
+	reportToken := flags.String("report-token", os.Getenv("COMMAND_PREFLIGHT_REPORT_TOKEN"), "legacy Bearer token for operator writes and moderation")
+	adminToken := flags.String("admin-token", os.Getenv("COMMAND_PREFLIGHT_ADMIN_TOKEN"), "Bearer token for moderation APIs (defaults to report-token)")
+	submitToken := flags.String("report-submit-token", os.Getenv("COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN"), "optional Bearer token required for report submissions")
+	allowProxiedAdmin := flags.Bool("allow-proxied-admin", envBool("COMMAND_PREFLIGHT_ALLOW_PROXIED_ADMIN", false), "allow moderation APIs through a reverse proxy")
+	reportsPerMinute := flags.Int("reports-per-minute", envInt("COMMAND_PREFLIGHT_REPORTS_PER_MINUTE", 60), "global report submission limit per minute")
+	retentionDays := flags.Int("report-retention-days", envInt("COMMAND_PREFLIGHT_REPORT_RETENTION_DAYS", 30), "days to retain terminal queue records; zero disables pruning")
 	flags.Parse(os.Args[1:])
-	if *allowReport && *reportToken == "" {
-		log.Fatal("--report-token is required with --allow-report")
+	if *allowReport && *reportToken == "" && *adminToken == "" {
+		log.Fatal("--report-token or --admin-token is required with --allow-report")
+	}
+	adminCredential := *adminToken
+	if adminCredential == "" {
+		adminCredential = *reportToken
+	}
+	if *allowReport && len(adminCredential) < 32 {
+		log.Fatal("the moderation token must contain at least 32 characters")
+	}
+	if *submitToken != "" && len(*submitToken) < 32 {
+		log.Fatal("--report-submit-token must contain at least 32 characters when set")
 	}
 	store, err := cloud.OpenStore(*data)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
-	server := &cloud.Server{Store: store, AllowReport: *allowReport, ReportToken: *reportToken}
+	if *retentionDays < 0 {
+		log.Fatal("--report-retention-days must be zero or greater")
+	}
+	if *reportsPerMinute < 1 {
+		log.Fatal("--reports-per-minute must be at least 1")
+	}
+	if *retentionDays > 0 {
+		retention := time.Duration(*retentionDays) * 24 * time.Hour
+		if err := pruneReports(store, retention); err != nil {
+			log.Fatalf("prune reports: %v", err)
+		}
+		go runReportPruner(store, retention)
+	}
+	server := &cloud.Server{
+		Store:             store,
+		AllowReport:       *allowReport,
+		ReportToken:       *reportToken,
+		AdminToken:        *adminToken,
+		ReportSubmitToken: *submitToken,
+		AllowProxiedAdmin: *allowProxiedAdmin,
+		ReportsPerMinute:  *reportsPerMinute,
+	}
 	httpServer := &http.Server{
 		Addr:              *listen,
 		Handler:           server.Handler(),
@@ -38,6 +74,27 @@ func main() {
 	fmt.Printf("command-preflight-server listening on http://%s\n", *listen)
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(cloud.AddressError(*listen, err))
+	}
+}
+
+func pruneReports(store *cloud.Store, retention time.Duration) error {
+	removed, err := store.PruneReports(time.Now().UTC().Add(-retention))
+	if err != nil {
+		return err
+	}
+	if removed > 0 {
+		log.Printf("pruned %d terminal report(s)", removed)
+	}
+	return nil
+}
+
+func runReportPruner(store *cloud.Store, retention time.Duration) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := pruneReports(store, retention); err != nil {
+			log.Printf("prune reports: %v", err)
+		}
 	}
 }
 
@@ -56,6 +113,18 @@ func envBool(name string, fallback bool) bool {
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
 		log.Fatalf("%s must be true or false", name)
+	}
+	return parsed
+}
+
+func envInt(name string, fallback int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Fatalf("%s must be an integer", name)
 	}
 	return parsed
 }

@@ -198,11 +198,24 @@ func runDoctor() int {
 	fmt.Printf("version: %s\n", core.Version)
 	fmt.Printf("runtime: %s\n", core.RuntimeSummary())
 	fmt.Printf("default shell: %s\n", defaultShell())
-	fmt.Println("telemetry: disabled (local-only MVP)")
+	fmt.Println("telemetry: disabled")
 	if strings.TrimSpace(os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL")) == "" {
 		fmt.Println("knowledge lookup: disabled (offline)")
 	} else {
 		fmt.Println("knowledge lookup: opt-in (fingerprint IDs only)")
+	}
+	if reportingEnabled() {
+		reportURL := strings.TrimSpace(os.Getenv("COMMAND_PREFLIGHT_REPORT_URL"))
+		if reportURL == "" {
+			reportURL = strings.TrimSpace(os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL"))
+		}
+		if reportURL == "" {
+			fmt.Println("community reports: misconfigured (reporting is on but no URL is set)")
+		} else {
+			fmt.Println("community reports: opt-in (redacted queue submissions)")
+		}
+	} else {
+		fmt.Println("community reports: disabled")
 	}
 	fmt.Println("mcp: run `command-preflight mcp` over stdio")
 	if _, err := os.Stat("."); err != nil {
@@ -283,9 +296,15 @@ func runSetup(args []string) int {
 	fs.SetOutput(os.Stderr)
 	client := "both"
 	knowledgeURL := os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL")
+	reportURL := os.Getenv("COMMAND_PREFLIGHT_REPORT_URL")
+	reportToken := os.Getenv("COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN")
+	enableReporting := reportingEnabled()
 	apply := false
 	fs.StringVar(&client, "client", client, "client: codex, claude, or both")
 	fs.StringVar(&knowledgeURL, "knowledge-url", knowledgeURL, "opt-in read-only knowledge URL (also COMMAND_PREFLIGHT_KNOWLEDGE_URL)")
+	fs.StringVar(&reportURL, "report-url", reportURL, "opt-in report queue URL (also COMMAND_PREFLIGHT_REPORT_URL)")
+	fs.StringVar(&reportToken, "report-submit-token", reportToken, "optional token for a private report queue (also COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN)")
+	fs.BoolVar(&enableReporting, "enable-reporting", enableReporting, "enable explicit redacted community report submission")
 	fs.BoolVar(&apply, "apply", false, "apply the MCP configuration instead of only printing it")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -295,6 +314,19 @@ func runSetup(args []string) int {
 			fmt.Fprintf(os.Stderr, "invalid knowledge URL: %v\n", err)
 			return 2
 		}
+	}
+	if strings.TrimSpace(reportURL) != "" {
+		if _, err := cloud.NewClient(reportURL); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid report URL: %v\n", err)
+			return 2
+		}
+	}
+	if enableReporting && strings.TrimSpace(reportURL) == "" {
+		reportURL = knowledgeURL
+	}
+	if enableReporting && strings.TrimSpace(reportURL) == "" {
+		fmt.Fprintln(os.Stderr, "--enable-reporting requires --report-url or --knowledge-url")
+		return 2
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -313,8 +345,8 @@ func runSetup(args []string) int {
 	}
 	configured := 0
 	for _, name := range clients {
-		mcpArgs := setupCommand(name, executable, knowledgeURL)
-		fmt.Printf("%s: %s %s\n", name, name, shellJoin(mcpArgs))
+		mcpArgs := setupCommandWithOptions(name, executable, knowledgeURL, reportURL, reportToken, enableReporting)
+		fmt.Printf("%s: %s %s\n", name, name, shellJoin(redactSetupArgs(mcpArgs)))
 		if !apply {
 			continue
 		}
@@ -341,11 +373,22 @@ func runSetup(args []string) int {
 }
 
 func setupCommand(client, executable, knowledgeURL string) []string {
+	return setupCommandWithOptions(client, executable, knowledgeURL, "", "", false)
+}
+
+func setupCommandWithOptions(client, executable, knowledgeURL, reportURL, reportToken string, enableReporting bool) []string {
 	args := []string{"mcp", "add"}
 	switch client {
 	case "codex":
 		if knowledgeURL != "" {
 			args = append(args, "--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL="+knowledgeURL)
+		}
+		if enableReporting {
+			args = append(args, "--env", "COMMAND_PREFLIGHT_REPORTING=on")
+			args = append(args, "--env", "COMMAND_PREFLIGHT_REPORT_URL="+reportURL)
+			if reportToken != "" {
+				args = append(args, "--env", "COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN="+reportToken)
+			}
 		}
 		args = append(args, "command-preflight", "--", executable, "mcp")
 	case "claude":
@@ -353,6 +396,13 @@ func setupCommand(client, executable, knowledgeURL string) []string {
 		args = append(args, "command-preflight")
 		if knowledgeURL != "" {
 			args = append(args, "--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL="+knowledgeURL)
+		}
+		if enableReporting {
+			args = append(args, "--env", "COMMAND_PREFLIGHT_REPORTING=on")
+			args = append(args, "--env", "COMMAND_PREFLIGHT_REPORT_URL="+reportURL)
+			if reportToken != "" {
+				args = append(args, "--env", "COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN="+reportToken)
+			}
 		}
 		args = append(args, "--", executable, "mcp")
 	}
@@ -371,11 +421,30 @@ func shellJoin(args []string) string {
 	return strings.Join(parts, " ")
 }
 
+func redactSetupArgs(args []string) []string {
+	redacted := append([]string(nil), args...)
+	for index, arg := range redacted {
+		if strings.HasPrefix(arg, "COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN=") {
+			redacted[index] = "COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN=[REDACTED]"
+		}
+	}
+	return redacted
+}
+
 func defaultShell() string {
 	if runtime.GOOS == "windows" {
 		return "powershell"
 	}
 	return "bash"
+}
+
+func reportingEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("COMMAND_PREFLIGHT_REPORTING"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func interactiveStdin() bool {
@@ -439,9 +508,9 @@ Usage:
   command-preflight mcp
   command-preflight doctor
   command-preflight install-skill --target codex|claude|both
-  command-preflight setup --client codex|claude|both [--knowledge-url <https://...>] [--apply]
+  command-preflight setup --client codex|claude|both [--knowledge-url <https://...>] [--report-url <https://...>] [--report-submit-token <token>] [--enable-reporting] [--apply]
   command-preflight version
 
-The MVP never executes the command being checked and keeps telemetry disabled.
+The tool never executes the command being checked. Reporting is disabled unless explicitly enabled.
 Use the MCP subcommand as a stdio server for Codex, Claude Code, or another MCP client.`)
 }

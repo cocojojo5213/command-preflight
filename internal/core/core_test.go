@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestRedactSecrets(t *testing.T) {
@@ -16,6 +17,29 @@ func TestRedactSecrets(t *testing.T) {
 	}
 	if !strings.Contains(output, "[REDACTED]") {
 		t.Fatalf("expected redaction marker, got %s", output)
+	}
+}
+
+func TestRedactPublicText(t *testing.T) {
+	input := `Use token=secret-value from C:\Users\alice\project, /srv/private/repo, or src/private/file.go; contact alice@example.com at https://internal.example.test and set PROJECT_HOME=/opt/private or $HOME; host 192.0.2.10.`
+	got := RedactPublicText(input)
+	for _, unwanted := range []string{"secret-value", "alice@example.com", `C:\Users\alice`, "/srv/private", "src/private", "internal.example.test", "PROJECT_HOME", "$HOME", "192.0.2.10"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("public text leaked %q: %q", unwanted, got)
+		}
+	}
+	for _, marker := range []string{"[REDACTED]", "<EMAIL>", "<PATH>", "<URL>", "<ENV>", "<IP>"} {
+		if !strings.Contains(got, marker) {
+			t.Fatalf("expected %s marker in %q", marker, got)
+		}
+	}
+
+	long := RedactPublicText(strings.Repeat("界", 500))
+	if len(long) > 1200 || !utf8.ValidString(long) || !strings.HasSuffix(long, "...") {
+		t.Fatalf("invalid public text truncation: bytes=%d valid=%t", len(long), utf8.ValidString(long))
+	}
+	if strings.ContainsRune(long, utf8.RuneError) {
+		t.Fatalf("public text truncation introduced replacement characters: %q", long)
 	}
 }
 

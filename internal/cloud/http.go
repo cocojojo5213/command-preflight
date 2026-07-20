@@ -1,17 +1,29 @@
 package cloud
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Server struct {
-	Store       *Store
-	AllowReport bool
-	ReportToken string
+	Store             *Store
+	AllowReport       bool
+	ReportToken       string // kept for backwards-compatible operator writes
+	AdminToken        string // protects the moderation API
+	ReportSubmitToken string // optional token for private deployments
+	AllowProxiedAdmin bool   // opt-in for authenticated admin access through a reverse proxy
+	ReportsPerMinute  int    // zero uses the privacy-preserving global default
+	reportRateMu      sync.Mutex
+	reportRateWindow  time.Time
+	reportRateCount   int
 }
 
 func (server *Server) Handler() http.Handler {
@@ -19,6 +31,11 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("/", server.index)
 	mux.HandleFunc("/healthz", server.health)
 	mux.HandleFunc("/v1/knowledge/", server.knowledge)
+	mux.HandleFunc("/v1/reports", server.reports)
+	mux.HandleFunc("/v1/admin/reports", server.adminReports)
+	mux.HandleFunc("/v1/admin/reports/review", server.adminReview)
+	mux.HandleFunc("/v1/admin/reports/publish", server.adminPublish)
+	mux.HandleFunc("/v1/admin/reports/", server.adminReport)
 	return maxBody(mux, 64*1024)
 }
 
@@ -34,11 +51,12 @@ func (server *Server) index(writer http.ResponseWriter, request *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
 		"service":           "command-preflight-knowledge",
 		"status":            "ok",
-		"access":            "read-only-lookups",
+		"access":            "public-lookups; moderated-report-queue",
 		"reporting_enabled": server.AllowReport,
-		"privacy":           "Lookups use only public cp1 fingerprint IDs; commands, paths, environment variables, and terminal output are never accepted.",
+		"privacy":           "The application accepts only a public fingerprint and short pattern-redacted fix text; it has no raw-command, path, environment, or terminal-log fields.",
 		"health":            "/healthz",
 		"lookup":            "/v1/knowledge/{fingerprint_id}",
+		"report":            "/v1/reports",
 		"source":            "https://github.com/cocojojo5213/command-preflight",
 	})
 }
@@ -51,7 +69,7 @@ func (server *Server) health(writer http.ResponseWriter, request *http.Request) 
 	writeJSON(writer, http.StatusOK, map[string]interface{}{
 		"status":            "ok",
 		"service":           "command-preflight-knowledge",
-		"mode":              "offline-by-default",
+		"mode":              "lookup plus moderated queue",
 		"reporting_enabled": server.AllowReport,
 	})
 }
@@ -71,14 +89,12 @@ func (server *Server) knowledge(writer http.ResponseWriter, request *http.Reques
 		}
 		writeJSON(writer, http.StatusOK, entry)
 	case http.MethodPut:
-		if !server.AllowReport || !server.authorized(request) {
+		if !server.AllowReport || !server.authorizedAdmin(request) {
 			writeJSON(writer, http.StatusForbidden, map[string]string{"error": "reporting is disabled or unauthorized"})
 			return
 		}
 		var entry Entry
-		decoder := json.NewDecoder(request.Body)
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&entry); err != nil {
+		if err := decodeJSON(request, &entry); err != nil {
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid entry", "detail": err.Error()})
 			return
 		}
@@ -98,8 +114,212 @@ func (server *Server) knowledge(writer http.ResponseWriter, request *http.Reques
 	}
 }
 
-func (server *Server) authorized(request *http.Request) bool {
-	return server.ReportToken != "" && request.Header.Get("Authorization") == "Bearer "+server.ReportToken
+func (server *Server) reports(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer)
+		return
+	}
+	if !server.AllowReport || !server.authorizedSubmit(request) {
+		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "reporting is disabled or unauthorized"})
+		return
+	}
+	if !server.allowReportRequest(time.Now().UTC()) {
+		writer.Header().Set("Retry-After", "60")
+		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "report rate limit exceeded"})
+		return
+	}
+	var input ReportInput
+	if err := decodeJSON(request, &input); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid report", "detail": err.Error()})
+		return
+	}
+	report, duplicate, err := server.Store.SubmitReport(input)
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "report rejected", "detail": err.Error()})
+		return
+	}
+	status := http.StatusAccepted
+	if duplicate {
+		status = http.StatusOK
+	}
+	writeJSON(writer, status, report)
+}
+
+func (server *Server) adminReports(writer http.ResponseWriter, request *http.Request) {
+	if !server.authorizedAdmin(request) {
+		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "admin authorization required"})
+		return
+	}
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer)
+		return
+	}
+	limit := 100
+	if value := request.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 500 {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "limit must be between 1 and 500"})
+			return
+		}
+		limit = parsed
+	}
+	status := strings.ToLower(strings.TrimSpace(request.URL.Query().Get("status")))
+	if status != "" && status != "all" && status != ReportPending && status != ReportHeld && status != ReportApproved && status != ReportRejected && status != ReportPublished {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid report status"})
+		return
+	}
+	reports := server.Store.ListReports(status, limit)
+	writeJSON(writer, http.StatusOK, map[string]interface{}{"reports": reports, "count": len(reports)})
+}
+
+func (server *Server) adminReport(writer http.ResponseWriter, request *http.Request) {
+	if !server.authorizedAdmin(request) {
+		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "admin authorization required"})
+		return
+	}
+	id := strings.TrimPrefix(request.URL.Path, "/v1/admin/reports/")
+	if id == "" || strings.Contains(id, "/") {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid report id"})
+		return
+	}
+	switch request.Method {
+	case http.MethodGet:
+		report, ok := server.Store.GetReport(id)
+		if !ok {
+			writeJSON(writer, http.StatusNotFound, map[string]string{"error": "report not found"})
+			return
+		}
+		writeJSON(writer, http.StatusOK, report)
+	case http.MethodDelete:
+		err := server.Store.DeleteReport(id)
+		if errors.Is(err, ErrReportNotFound) {
+			writeJSON(writer, http.StatusNotFound, map[string]string{"error": "report not found"})
+			return
+		}
+		if err != nil {
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"error": "delete report failed"})
+			return
+		}
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		writer.WriteHeader(http.StatusNoContent)
+	default:
+		methodNotAllowed(writer)
+	}
+}
+
+func (server *Server) adminReview(writer http.ResponseWriter, request *http.Request) {
+	if !server.authorizedAdmin(request) {
+		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "admin authorization required"})
+		return
+	}
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer)
+		return
+	}
+	var batch ReviewBatch
+	if err := decodeJSON(request, &batch); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid review batch", "detail": err.Error()})
+		return
+	}
+	reports, err := server.Store.ReviewReports(batch.Reviews)
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "review failed", "detail": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{"reports": reports, "count": len(reports)})
+}
+
+func (server *Server) adminPublish(writer http.ResponseWriter, request *http.Request) {
+	if !server.authorizedAdmin(request) {
+		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "admin authorization required"})
+		return
+	}
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer)
+		return
+	}
+	var input PublishRequest
+	if err := decodeJSON(request, &input); err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid publish request", "detail": err.Error()})
+		return
+	}
+	entries, err := server.Store.PublishReports(input.IDs)
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "publish failed", "detail": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]interface{}{"entries": entries, "count": len(entries)})
+}
+
+func (server *Server) authorizedAdmin(request *http.Request) bool {
+	if !server.AllowProxiedAdmin && (request.Header.Get("CF-Connecting-IP") != "" || request.Header.Get("X-Forwarded-For") != "" || request.Header.Get("Forwarded") != "") {
+		return false
+	}
+	token := server.AdminToken
+	if token == "" {
+		token = server.ReportToken
+	}
+	return bearerMatches(request, token)
+}
+
+func (server *Server) authorizedSubmit(request *http.Request) bool {
+	if server.ReportSubmitToken == "" {
+		return true
+	}
+	return bearerMatches(request, server.ReportSubmitToken)
+}
+
+func (server *Server) allowReportRequest(now time.Time) bool {
+	limit := server.ReportsPerMinute
+	if limit == 0 {
+		limit = 60
+	}
+	if limit < 0 {
+		return true
+	}
+	server.reportRateMu.Lock()
+	defer server.reportRateMu.Unlock()
+	if server.reportRateWindow.IsZero() || now.Sub(server.reportRateWindow) >= time.Minute {
+		server.reportRateWindow = now
+		server.reportRateCount = 0
+	}
+	if server.reportRateCount >= limit {
+		return false
+	}
+	server.reportRateCount++
+	return true
+}
+
+func bearerMatches(request *http.Request, token string) bool {
+	if token == "" {
+		return false
+	}
+	want := "Bearer " + token
+	got := request.Header.Get("Authorization")
+	if len(got) != len(want) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func decodeJSON(request *http.Request, target interface{}) error {
+	if request.Body == nil {
+		return io.EOF
+	}
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func maxBody(handler http.Handler, bytes int64) http.Handler {

@@ -15,7 +15,7 @@ The default client is local-only:
 
 The latest binaries are published on the [GitHub Releases page](https://github.com/cocojojo5213/command-preflight/releases).
 
-Windows users should download the matching ZIP, extract every file, and double-click `INSTALL.cmd`. It installs the binary under `%LOCALAPPDATA%\CommandPreflight`, installs the bundled Skills, and registers MCP for any installed Codex or Claude Code CLI. It asks before enabling the optional read-only community lookup. Do not double-click `command-preflight.exe` as an installer; it is a command-line program.
+Windows users should download the matching ZIP, extract every file, and double-click `INSTALL.cmd`. It installs the binary under `%LOCALAPPDATA%\CommandPreflight`, installs the bundled Skills, and registers MCP for any installed Codex or Claude Code CLI. It asks separately before enabling community lookup or moderated reporting. Do not double-click `command-preflight.exe` as an installer; it is a command-line program.
 
 macOS and Linux:
 
@@ -75,21 +75,35 @@ To configure the optional public lookup for both clients in one step:
 command-preflight setup --client both --knowledge-url https://preflight.52131415.xyz --apply
 ```
 
+Community reporting is a separate explicit opt-in. When enabled, the MCP tool
+can submit a verified resolution to the server moderation queue:
+
+```bash
+command-preflight setup --client both \
+  --knowledge-url https://preflight.52131415.xyz \
+  --report-url https://preflight.52131415.xyz \
+  --enable-reporting --apply
+```
+
+Reports contain only the public fingerprint, a short redacted fix summary, and
+a safe verification step. They never contain the original command, paths,
+environment variables, credentials, or terminal output.
+
 If you are asking an AI agent to install this project, give it the repository URL and ask it to detect the host OS, use the release installer, run `doctor`, and verify the MCP registration. Keep cloud lookup disabled unless you explicitly want the read-only endpoint.
 
 The Codex Skill is installed under `$CODEX_HOME/skills` or `~/.codex/skills` by default. Set `COMMAND_PREFLIGHT_CODEX_SKILL_DIR` for a non-standard layout.
 
 ## Optional cloud knowledge service
 
-The same repository also builds `command-preflight-server`. It is a small read-only-by-default HTTP service for curated, privacy-preserving error knowledge. It is not required by the local client.
+The same repository also builds `command-preflight-server`. It is a small read-only-by-default HTTP service for curated, privacy-preserving error knowledge and an optional moderated report queue. It is not required by the local client.
 
-The project currently maintains a public TLS endpoint for read-only lookups:
+The project currently maintains a public TLS endpoint:
 
 ```text
 https://preflight.52131415.xyz
 ```
 
-It accepts GET lookups by public fingerprint ID and returns `403` for writes. Cloudflare handles normal request metadata such as an IP address; the application stores only curated public fingerprints and fixes. Forks and private deployments can use their own endpoint.
+It accepts GET lookups by public fingerprint ID. When `reporting_enabled` is true, explicitly opted-in clients may POST constrained reports into a private moderation queue; public PUT requests still return `403`. A report is not queryable until an operator approves and separately publishes it. Cloudflare handles normal request metadata such as an IP address; the application does not accept or persist original commands, paths, environment variables, terminal output, accounts, client IP addresses, or user-agent strings. Forks and private deployments can use their own endpoint.
 
 Start it with Docker Compose:
 
@@ -100,7 +114,7 @@ docker compose up -d --build
 curl -fsS http://127.0.0.1:8787/healthz
 ```
 
-The Compose setup binds to localhost, stores data in a Docker named volume, and disables writes to the knowledge API. Put a TLS-terminating reverse proxy or Cloudflare Tunnel in front of it before exposing it to a network. To deliberately change the container listen address, copy `.env.example` to `.env` and set `COMMAND_PREFLIGHT_BIND`; to publish only on a private Tailnet interface, set `COMMAND_PREFLIGHT_PUBLISHED_BIND` to that IP and port. Do not expose an unauthenticated instance directly to the Internet. A host bind mount can be selected with `COMMAND_PREFLIGHT_DATA_VOLUME=./data` (the directory must be writable by container UID `65532`).
+The Compose setup binds to localhost, stores data in a Docker named volume, and disables report submission by default. Put a TLS-terminating reverse proxy or Cloudflare Tunnel in front of it before exposing it to a network. To deliberately change the container listen address, copy `.env.example` to `.env` and set `COMMAND_PREFLIGHT_BIND`; to publish only on a private Tailnet interface, set `COMMAND_PREFLIGHT_PUBLISHED_BIND` to that IP and port. Do not expose the moderation API without a strong admin token and a private access boundary. A host bind mount can be selected with `COMMAND_PREFLIGHT_DATA_VOLUME=./data` (the directory must be writable by container UID `65532`).
 
 Lookups contain only a public fingerprint ID:
 
@@ -122,7 +136,7 @@ export COMMAND_PREFLIGHT_KNOWLEDGE_URL=https://preflight.52131415.xyz
 command-preflight lookup --fingerprint-id cp1-0123456789abcdef0123 --json
 ```
 
-The lookup sends only the `cp1-...` ID. It never sends commands, environment variables, paths, or terminal output. The authenticated `PUT` endpoint is for operator-curated seed data, not anonymous uploads; automatic reporting remains disabled on the public deployment.
+The lookup sends only the `cp1-...` ID. It never sends commands, environment variables, paths, or terminal output. Reporting remains off unless `COMMAND_PREFLIGHT_REPORTING=on` is explicitly configured. The public report endpoint creates only pending queue records; the authenticated moderation API is responsible for approve/reject/hold decisions and publication.
 
 ## Development
 

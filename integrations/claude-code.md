@@ -26,4 +26,13 @@ To explicitly enable the project-maintained read-only lookup:
 command-preflight setup --client claude --knowledge-url https://preflight.52131415.xyz --apply
 ```
 
-Do not enable a remote lookup unless its privacy and retention policy are acceptable to the user. The bundled client has no network behavior by default; lookup requires an explicit `COMMAND_PREFLIGHT_KNOWLEDGE_URL` and sends only a public fingerprint ID. The public deployment does not accept client reports.
+To separately enable verified-resolution reports to the moderation queue:
+
+```bash
+command-preflight setup --client claude \
+  --knowledge-url https://preflight.52131415.xyz \
+  --report-url https://preflight.52131415.xyz \
+  --enable-reporting --apply
+```
+
+Do not enable a remote lookup or report queue unless its privacy and retention policy are acceptable to the user. The bundled client has no network behavior by default; lookup requires an explicit `COMMAND_PREFLIGHT_KNOWLEDGE_URL`, while reporting additionally requires `COMMAND_PREFLIGHT_REPORTING=on`. Reports contain only a public fingerprint and redacted fix text and wait for operator review.

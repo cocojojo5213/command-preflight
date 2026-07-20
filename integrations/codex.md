@@ -30,4 +30,13 @@ To explicitly enable the project-maintained read-only lookup, configure the MCP 
 command-preflight setup --client codex --knowledge-url https://preflight.52131415.xyz --apply
 ```
 
-The default client is local-only. It does not add a network endpoint or upload command data. Lookup is opt-in and sends only public fingerprint IDs; see [docs/cloud.md](../docs/cloud.md) for self-hosting or the project endpoint.
+Community reporting is a separate, explicit opt-in. It sends only a public fingerprint and a redacted, model-authored fix after local verification:
+
+```bash
+command-preflight setup --client codex \
+  --knowledge-url https://preflight.52131415.xyz \
+  --report-url https://preflight.52131415.xyz \
+  --enable-reporting --apply
+```
+
+The default client is local-only. It does not add a network endpoint or upload command data. Lookup and reporting are separate opt-ins; reporting goes to a moderation queue and never sends commands, paths, environment variables, or terminal output. See [docs/cloud.md](../docs/cloud.md) for self-hosting or the project endpoint.

@@ -36,6 +36,13 @@ try {
     else {
         Write-Host 'Knowledge lookup remains offline (set COMMAND_PREFLIGHT_KNOWLEDGE_URL to opt in).'
     }
+    if ($env:COMMAND_PREFLIGHT_REPORTING -match '^(?i:on|true|yes|1)$') {
+        $reportUrl = if ($env:COMMAND_PREFLIGHT_REPORT_URL) { $env:COMMAND_PREFLIGHT_REPORT_URL } else { $env:COMMAND_PREFLIGHT_KNOWLEDGE_URL }
+        Write-Host "Opt-in moderated reporting configured for: $reportUrl"
+    }
+    else {
+        Write-Host 'Community reporting remains disabled (set COMMAND_PREFLIGHT_REPORTING=on to opt in).'
+    }
     Write-Host 'Open a new terminal before using command-preflight.'
 }
 finally {

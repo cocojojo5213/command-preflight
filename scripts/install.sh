@@ -46,4 +46,9 @@ if [ -n "${COMMAND_PREFLIGHT_KNOWLEDGE_URL:-}" ]; then
 else
   printf '%s\n' 'Knowledge lookup remains offline (set COMMAND_PREFLIGHT_KNOWLEDGE_URL to opt in).'
 fi
+if [ "${COMMAND_PREFLIGHT_REPORTING:-off}" = "on" ] || [ "${COMMAND_PREFLIGHT_REPORTING:-off}" = "true" ]; then
+  printf '%s\n' "Opt-in moderated reporting configured for: ${COMMAND_PREFLIGHT_REPORT_URL:-${COMMAND_PREFLIGHT_KNOWLEDGE_URL:-unset}}"
+else
+  printf '%s\n' 'Community reporting remains disabled (set COMMAND_PREFLIGHT_REPORTING=on to opt in).'
+fi
 printf '%s\n' 'If the command is not found, add the prefix to PATH for your shell.'

@@ -49,3 +49,19 @@ func TestSetupCommandWithKnowledgeURL(t *testing.T) {
 		t.Fatalf("claude connected setup command = %#v, want %#v", got, want)
 	}
 }
+
+func TestSetupCommandWithReporting(t *testing.T) {
+	executable := `/opt/command-preflight`
+	got := setupCommandWithOptions("codex", executable, "https://preflight.example", "https://preflight.example", "submit-token", true)
+	want := []string{
+		"mcp", "add",
+		"--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL=https://preflight.example",
+		"--env", "COMMAND_PREFLIGHT_REPORTING=on",
+		"--env", "COMMAND_PREFLIGHT_REPORT_URL=https://preflight.example",
+		"--env", "COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN=submit-token",
+		"command-preflight", "--", executable, "mcp",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("codex reporting setup command = %#v, want %#v", got, want)
+	}
+}

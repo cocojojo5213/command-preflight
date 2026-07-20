@@ -38,6 +38,20 @@ set "COMMAND_PREFLIGHT_KNOWLEDGE_URL="
 echo Knowledge lookup stays offline.
 
 :setup
+echo.
+choice /C YN /N /M "Share verified, redacted fixes with the moderated community queue? [Y/N] "
+if errorlevel 2 goto reports_off
+set "COMMAND_PREFLIGHT_REPORTING=on"
+set "COMMAND_PREFLIGHT_REPORT_URL=https://preflight.52131415.xyz"
+echo Community reporting enabled. Original commands and terminal output are not uploaded.
+goto register
+
+:reports_off
+set "COMMAND_PREFLIGHT_REPORTING=off"
+set "COMMAND_PREFLIGHT_REPORT_URL="
+echo Community reporting stays disabled.
+
+:register
 echo Registering MCP integrations for installed clients...
 "%target%\command-preflight.exe" setup --client both --apply
 if errorlevel 1 echo MCP registration needs manual review; the binary is still installed.

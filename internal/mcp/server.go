@@ -15,6 +15,9 @@ import (
 
 type Config struct {
 	KnowledgeURL string
+	ReportURL    string
+	ReportToken  string
+	Reporting    bool
 }
 
 type request struct {
@@ -33,7 +36,12 @@ type response struct {
 
 // Serve runs a small stdio MCP server. It intentionally exposes inspection tools only.
 func Serve(input io.Reader, output io.Writer) error {
-	return ServeWithConfig(input, output, Config{KnowledgeURL: os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL")})
+	return ServeWithConfig(input, output, Config{
+		KnowledgeURL: os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL"),
+		ReportURL:    os.Getenv("COMMAND_PREFLIGHT_REPORT_URL"),
+		ReportToken:  os.Getenv("COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN"),
+		Reporting:    envEnabled(os.Getenv("COMMAND_PREFLIGHT_REPORTING")),
+	})
 }
 
 func ServeWithConfig(input io.Reader, output io.Writer, config Config) error {
@@ -44,6 +52,22 @@ func ServeWithConfig(input io.Reader, output io.Writer, config Config) error {
 			return fmt.Errorf("configure knowledge lookup: %w", err)
 		}
 		knowledgeClient = client
+	}
+	var reportClient *cloud.Client
+	if config.Reporting {
+		reportURL := strings.TrimSpace(config.ReportURL)
+		if reportURL == "" {
+			reportURL = strings.TrimSpace(config.KnowledgeURL)
+		}
+		if reportURL == "" {
+			return fmt.Errorf("configure report URL: set COMMAND_PREFLIGHT_REPORT_URL or COMMAND_PREFLIGHT_KNOWLEDGE_URL")
+		}
+		client, err := cloud.NewClient(reportURL)
+		if err != nil {
+			return fmt.Errorf("configure report upload: %w", err)
+		}
+		client.ReportToken = config.ReportToken
+		reportClient = client
 	}
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 4096), 4*1024*1024)
@@ -64,14 +88,14 @@ func ServeWithConfig(input io.Reader, output io.Writer, config Config) error {
 		if strings.HasPrefix(req.Method, "notifications/") {
 			continue
 		}
-		if err := handleRequest(encoder, req, knowledgeClient); err != nil {
+		if err := handleRequest(encoder, req, knowledgeClient, reportClient); err != nil {
 			return err
 		}
 	}
 	return scanner.Err()
 }
 
-func handleRequest(encoder *json.Encoder, req request, knowledgeClient *cloud.Client) error {
+func handleRequest(encoder *json.Encoder, req request, knowledgeClient, reportClient *cloud.Client) error {
 	id := rawID(req.ID)
 	switch req.Method {
 	case "initialize":
@@ -88,6 +112,9 @@ func handleRequest(encoder *json.Encoder, req request, knowledgeClient *cloud.Cl
 		instructions := "Inspection only. Never execute commands or upload telemetry. Validate locally before acting."
 		if knowledgeClient != nil {
 			instructions += " An opt-in knowledge lookup is available and sends only public fingerprint IDs."
+		}
+		if reportClient != nil {
+			instructions += " An explicitly enabled report tool is available; call it only after a fix is verified, and send only the public fingerprint plus redacted summary and verification text."
 		}
 		return encoder.Encode(response{JSONRPC: "2.0", ID: id, Result: map[string]interface{}{
 			"protocolVersion": protocolVersion,
@@ -135,15 +162,40 @@ func handleRequest(encoder *json.Encoder, req request, knowledgeClient *cloud.Cl
 				},
 			})
 		}
+		if reportClient != nil {
+			tools = append(tools, map[string]interface{}{
+				"name":        "submit_resolution",
+				"description": "Submit a verified, redacted resolution to the operator moderation queue. Available only when reporting was explicitly enabled; never include command text, paths, environment variables, or terminal output.",
+				"inputSchema": map[string]interface{}{
+					"type": "object", "properties": map[string]interface{}{
+						"fingerprint": map[string]interface{}{
+							"type": "object", "properties": map[string]interface{}{
+								"version":    map[string]string{"type": "string"},
+								"id":         map[string]string{"type": "string", "description": "cp1 fingerprint ID"},
+								"shell":      map[string]string{"type": "string"},
+								"tool":       map[string]string{"type": "string"},
+								"error_kind": map[string]string{"type": "string"},
+								"exit_code":  map[string]string{"type": "integer"},
+							}, "required": []string{"version", "id", "shell", "error_kind", "exit_code"},
+						},
+						"summary":      map[string]string{"type": "string", "description": "Short redacted explanation of the safe fix"},
+						"verification": map[string]string{"type": "string", "description": "Safe local postcondition or help check"},
+						"verified":     map[string]string{"type": "boolean"},
+						"confidence":   map[string]string{"type": "number"},
+						"tool_version": map[string]string{"type": "string"},
+					}, "required": []string{"fingerprint", "summary", "verification", "verified"},
+				},
+			})
+		}
 		return encoder.Encode(response{JSONRPC: "2.0", ID: id, Result: map[string]interface{}{"tools": tools}})
 	case "tools/call":
-		return handleToolCall(encoder, id, req.Params, knowledgeClient)
+		return handleToolCall(encoder, id, req.Params, knowledgeClient, reportClient)
 	default:
 		return writeError(encoder, id, -32601, "method not found", req.Method)
 	}
 }
 
-func handleToolCall(encoder *json.Encoder, id interface{}, raw json.RawMessage, knowledgeClient *cloud.Client) error {
+func handleToolCall(encoder *json.Encoder, id interface{}, raw json.RawMessage, knowledgeClient, reportClient *cloud.Client) error {
 	var params struct {
 		Name      string                     `json:"name"`
 		Arguments map[string]json.RawMessage `json:"arguments"`
@@ -205,6 +257,54 @@ func handleToolCall(encoder *json.Encoder, id interface{}, raw json.RawMessage, 
 		if found {
 			result.(map[string]interface{})["entry"] = entry
 		}
+	case "submit_resolution":
+		if reportClient == nil {
+			return writeError(encoder, id, -32602, "reporting is not enabled", "set COMMAND_PREFLIGHT_REPORTING=on and configure a report URL")
+		}
+		var fingerprint cloud.PublicFingerprint
+		if err := objectArg(params.Arguments, "fingerprint", &fingerprint, true); err != nil {
+			return writeError(encoder, id, -32602, "invalid fingerprint", err.Error())
+		}
+		summary, err := stringArg(params.Arguments, "summary", true)
+		if err != nil {
+			return writeError(encoder, id, -32602, "invalid summary", err.Error())
+		}
+		verification, err := stringArg(params.Arguments, "verification", true)
+		if err != nil {
+			return writeError(encoder, id, -32602, "invalid verification", err.Error())
+		}
+		verified, err := boolArg(params.Arguments, "verified", true)
+		if err != nil {
+			return writeError(encoder, id, -32602, "invalid verified", err.Error())
+		}
+		if !verified {
+			return writeError(encoder, id, -32602, "resolution is not verified", "set verified=true only after the fix has been checked locally")
+		}
+		confidence, err := floatArg(params.Arguments, "confidence", false)
+		if err != nil {
+			return writeError(encoder, id, -32602, "invalid confidence", err.Error())
+		}
+		toolVersion, err := stringArg(params.Arguments, "tool_version", false)
+		if err != nil {
+			return writeError(encoder, id, -32602, "invalid tool_version", err.Error())
+		}
+		report, err := reportClient.SubmitReport(context.Background(), cloud.ReportInput{
+			Fingerprint: fingerprint,
+			Fix: cloud.Fix{
+				Summary:      summary,
+				Verification: verification,
+				ToolVersion:  toolVersion,
+				Confidence:   confidence,
+				Verified:     verified,
+			},
+		})
+		if err != nil {
+			// A report failure must never turn a locally successful workflow into
+			// a blocked command execution.
+			result = map[string]interface{}{"submitted": false, "error": err.Error()}
+			break
+		}
+		result = map[string]interface{}{"submitted": true, "report": report}
 	default:
 		return writeError(encoder, id, -32602, "unknown tool", params.Name)
 	}
@@ -246,6 +346,59 @@ func intArg(args map[string]json.RawMessage, name string, required bool) (int, e
 		return 0, err
 	}
 	return value, nil
+}
+
+func boolArg(args map[string]json.RawMessage, name string, required bool) (bool, error) {
+	raw, ok := args[name]
+	if !ok {
+		if required {
+			return false, fmt.Errorf("missing %s", name)
+		}
+		return false, nil
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, err
+	}
+	return value, nil
+}
+
+func floatArg(args map[string]json.RawMessage, name string, required bool) (float64, error) {
+	raw, ok := args[name]
+	if !ok {
+		if required {
+			return 0, fmt.Errorf("missing %s", name)
+		}
+		return 0, nil
+	}
+	var value float64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func objectArg(args map[string]json.RawMessage, name string, target interface{}, required bool) error {
+	raw, ok := args[name]
+	if !ok {
+		if required {
+			return fmt.Errorf("missing %s", name)
+		}
+		return nil
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func envEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func rawID(raw json.RawMessage) interface{} {

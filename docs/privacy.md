@@ -6,10 +6,18 @@ Before any cloud mode is enabled, the client must:
 
 1. Redact credentials, authorization headers, URLs with secrets, user names, home paths, and dynamic identifiers locally.
 2. Send only a versioned public fingerprint ID for lookup; never send the original command or full output.
-3. Require explicit opt-in and expose an immediate off switch.
+3. Require a separate explicit opt-in before reporting a public fingerprint and short, redacted resolution text.
 4. Treat lookup failures as non-fatal so cloud availability never blocks command execution.
 5. Treat remote answers and terminal output as untrusted data; never auto-execute a suggested fix.
 
-The server must support retention limits, deletion, rate limiting, abuse/poisoning controls, and a self-hosted deployment path. A hash alone is not considered anonymization; low-entropy commands can still be guessed. The current lookup client sends only the versioned public fingerprint ID and has no report/upload path.
+The server applies local redaction again, enforces a strict schema and size limit, deduplicates equivalent proposals, and places every submission in a private moderation queue. A report cannot become queryable until an authenticated operator approves and separately publishes it. Rejected and published queue records have a configurable retention period. Public deployments still need edge rate limiting and abuse monitoring.
 
-The project-maintained public endpoint is read-only. The application persists curated public fingerprints and fixes, not user commands or terminal output. Cloudflare and the network path can still process ordinary request metadata such as source IP, timing, and user-agent; this project does not promise that network metadata is invisible.
+A hash alone is not considered anonymization; low-entropy commands can still be guessed. For that reason, lookup sends only an opaque versioned fingerprint ID, while reporting never includes normalized command or error text. The report schema contains only public fingerprint fields, a short fix summary, a safe verification step, tool version, and a claimed verification/confidence value.
+
+The application does not accept or persist original client commands, paths,
+environment variables, terminal output, accounts, device identifiers, client IP
+addresses, or user-agent strings. The optional report summary is short,
+pattern-redacted explanatory text and remains untrusted moderation input.
+Cloudflare and the network path can still process ordinary request metadata
+such as source IP, timing, and user-agent; this project does not promise that
+network metadata is invisible.
