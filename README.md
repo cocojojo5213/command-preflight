@@ -151,3 +151,7 @@ See [the cloud deployment guide](docs/cloud.md), [the architecture](docs/archite
 ## Status
 
 This is an early open-source MVP. Shell parsing and CLI grammar are inherently platform- and version-specific; a successful preflight is not permission to skip normal approvals or postcondition checks.
+
+## Acknowledgements
+
+Command Preflight recognizes and appreciates the [LINUX DO community](https://linux.do/) for fostering open discussion, mutual support, and practical technical sharing.
