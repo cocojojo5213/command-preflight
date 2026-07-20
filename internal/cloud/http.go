@@ -21,9 +21,12 @@ type Server struct {
 	ReportSubmitToken string // optional token for private deployments
 	AllowProxiedAdmin bool   // opt-in for authenticated admin access through a reverse proxy
 	ReportsPerMinute  int    // zero uses the privacy-preserving global default
+	ReportsPerDay     int    // zero uses the UTC daily default; no client address is retained
 	reportRateMu      sync.Mutex
 	reportRateWindow  time.Time
 	reportRateCount   int
+	reportRateDay     time.Time
+	reportDailyCount  int
 }
 
 func (server *Server) Handler() http.Handler {
@@ -123,8 +126,9 @@ func (server *Server) reports(writer http.ResponseWriter, request *http.Request)
 		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "reporting is disabled or unauthorized"})
 		return
 	}
-	if !server.allowReportRequest(time.Now().UTC()) {
-		writer.Header().Set("Retry-After", "60")
+	allowed, retryAfter := server.allowReportRequest(time.Now().UTC())
+	if !allowed {
+		writer.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(retryAfter)))
 		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "report rate limit exceeded"})
 		return
 	}
@@ -270,25 +274,57 @@ func (server *Server) authorizedSubmit(request *http.Request) bool {
 	return bearerMatches(request, server.ReportSubmitToken)
 }
 
-func (server *Server) allowReportRequest(now time.Time) bool {
-	limit := server.ReportsPerMinute
-	if limit == 0 {
-		limit = 60
+func (server *Server) allowReportRequest(now time.Time) (bool, time.Duration) {
+	minuteLimit := server.ReportsPerMinute
+	if minuteLimit == 0 {
+		minuteLimit = 60
 	}
-	if limit < 0 {
-		return true
+	dailyLimit := server.ReportsPerDay
+	if dailyLimit == 0 {
+		dailyLimit = 500
 	}
+	if minuteLimit < 0 && dailyLimit < 0 {
+		return true, 0
+	}
+	now = now.UTC()
 	server.reportRateMu.Lock()
 	defer server.reportRateMu.Unlock()
-	if server.reportRateWindow.IsZero() || now.Sub(server.reportRateWindow) >= time.Minute {
+	if server.reportRateWindow.IsZero() || now.Before(server.reportRateWindow) || now.Sub(server.reportRateWindow) >= time.Minute {
 		server.reportRateWindow = now
 		server.reportRateCount = 0
 	}
-	if server.reportRateCount >= limit {
-		return false
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	if server.reportRateDay.IsZero() || !server.reportRateDay.Equal(today) {
+		server.reportRateDay = today
+		server.reportDailyCount = 0
 	}
-	server.reportRateCount++
-	return true
+	if dailyLimit >= 0 && server.reportDailyCount >= dailyLimit {
+		return false, today.Add(24 * time.Hour).Sub(now)
+	}
+	if minuteLimit >= 0 && server.reportRateCount >= minuteLimit {
+		return false, server.reportRateWindow.Add(time.Minute).Sub(now)
+	}
+	if dailyLimit >= 0 {
+		server.reportDailyCount++
+	}
+	if minuteLimit >= 0 {
+		server.reportRateCount++
+	}
+	return true, 0
+}
+
+func retryAfterSeconds(delay time.Duration) int {
+	if delay <= 0 {
+		return 1
+	}
+	seconds := int(delay / time.Second)
+	if delay%time.Second != 0 {
+		seconds++
+	}
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 func bearerMatches(request *http.Request, token string) bool {

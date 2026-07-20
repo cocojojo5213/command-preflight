@@ -402,6 +402,36 @@ func (store *Store) PruneReports(before time.Time) (int, error) {
 	return removed, nil
 }
 
+// PruneStaleReports removes old reports that still occupy the moderation
+// queue. Approved reports that were never published are intentionally treated
+// as stale too; published knowledge remains in entries and is not affected.
+func (store *Store) PruneStaleReports(before time.Time) (int, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	originalReports := store.reports
+	workingReports := make(map[string]Report, len(store.reports))
+	for id, report := range store.reports {
+		workingReports[id] = report
+	}
+	store.reports = workingReports
+	removed := 0
+	for id, report := range store.reports {
+		if (report.Status == ReportPending || report.Status == ReportHeld || report.Status == ReportApproved) && report.ReceivedAt.Before(before) {
+			delete(store.reports, id)
+			removed++
+		}
+	}
+	if removed == 0 {
+		store.reports = originalReports
+		return 0, nil
+	}
+	if err := store.persistLocked(); err != nil {
+		store.reports = originalReports
+		return 0, err
+	}
+	return removed, nil
+}
+
 func sameProposal(report Report, input ReportInput) bool {
 	return report.Fingerprint.ID == input.Fingerprint.ID &&
 		report.Fix.Summary == input.Fix.Summary &&

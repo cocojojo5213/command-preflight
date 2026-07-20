@@ -161,6 +161,82 @@ func TestPruneReportsRemovesOnlyOldTerminalReports(t *testing.T) {
 	}
 }
 
+func TestPruneStaleReportsRemovesOnlyOldUnresolvedReports(t *testing.T) {
+	store := mustTestStore(t)
+	makeInput := func(id, summary string) ReportInput {
+		fingerprint := testEntry().Fingerprint
+		fingerprint.ID = id
+		return ReportInput{
+			Fingerprint: fingerprint,
+			Fix: Fix{
+				Summary:      summary,
+				Verification: "Confirm the supported flag in local help.",
+				Verified:     true,
+			},
+		}
+	}
+	pending, _, err := store.SubmitReport(makeInput("cp1-aaaaaaaaaaaaaaaaaaaa", "Keep pending."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, _, err := store.SubmitReport(makeInput("cp1-bbbbbbbbbbbbbbbbbbbb", "Keep held."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, _, err := store.SubmitReport(makeInput("cp1-cccccccccccccccccccc", "Keep approved."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected, _, err := store.SubmitReport(makeInput("cp1-dddddddddddddddddddd", "Keep rejected."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, _, err := store.SubmitReport(makeInput("cp1-eeeeeeeeeeeeeeeeeeee", "Keep published."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReviewReports([]ReviewAction{
+		{ID: held.ID, Decision: "hold"},
+		{ID: approved.ID, Decision: "approve"},
+		{ID: rejected.ID, Decision: "reject"},
+		{ID: published.ID, Decision: "approve"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PublishReports([]string{published.ID}); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	store.mu.Lock()
+	for _, id := range []string{pending.ID, held.ID, approved.ID, rejected.ID, published.ID} {
+		report := store.reports[id]
+		report.ReceivedAt = old
+		store.reports[id] = report
+	}
+	store.mu.Unlock()
+
+	removed, err := store.PruneStaleReports(time.Now().UTC().Add(-24 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 3 {
+		t.Fatalf("removed reports = %d, want 3", removed)
+	}
+	for _, id := range []string{pending.ID, held.ID, approved.ID} {
+		if _, ok := store.GetReport(id); ok {
+			t.Fatalf("stale report %s was not pruned", id)
+		}
+	}
+	for _, id := range []string{rejected.ID, published.ID} {
+		if _, ok := store.GetReport(id); !ok {
+			t.Fatalf("terminal report %s was pruned", id)
+		}
+	}
+	if _, ok := store.Lookup(published.Fingerprint.ID); !ok {
+		t.Fatal("published knowledge was removed with stale queue history")
+	}
+}
+
 func TestServerLookupAndReportAuth(t *testing.T) {
 	store, _ := OpenStore("")
 	_ = store.Upsert(testEntry())
@@ -466,6 +542,20 @@ func TestReportEndpointGlobalRateLimit(t *testing.T) {
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusTooManyRequests || second.Header.Get("Retry-After") != "60" {
 		t.Fatalf("rate limited status = %d, retry-after = %q", second.StatusCode, second.Header.Get("Retry-After"))
+	}
+}
+
+func TestReportRateLimitResetsAtUtcDayBoundary(t *testing.T) {
+	server := &Server{ReportsPerMinute: 100, ReportsPerDay: 1}
+	firstAt := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	if allowed, _ := server.allowReportRequest(firstAt); !allowed {
+		t.Fatal("first report was unexpectedly limited")
+	}
+	if allowed, retry := server.allowReportRequest(firstAt.Add(time.Minute)); allowed || retry <= 11*time.Hour {
+		t.Fatalf("daily limit result = allowed %t, retry %s", allowed, retry)
+	}
+	if allowed, _ := server.allowReportRequest(firstAt.Add(24 * time.Hour)); !allowed {
+		t.Fatal("daily limit did not reset at UTC midnight")
 	}
 }
 

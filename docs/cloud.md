@@ -41,7 +41,9 @@ COMMAND_PREFLIGHT_ADMIN_TOKEN=
 COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN=
 COMMAND_PREFLIGHT_ALLOW_PROXIED_ADMIN=false
 COMMAND_PREFLIGHT_REPORTS_PER_MINUTE=60
+COMMAND_PREFLIGHT_REPORTS_PER_DAY=500
 COMMAND_PREFLIGHT_REPORT_RETENTION_DAYS=30
+COMMAND_PREFLIGHT_PENDING_RETENTION_DAYS=7
 ```
 
 `COMMAND_PREFLIGHT_ADMIN_TOKEN` protects the moderation API and operator seed
@@ -50,8 +52,11 @@ Cloudflare route cannot be used for moderation even with the endpoint path;
 use localhost or Tailnet. `COMMAND_PREFLIGHT_REPORT_TOKEN` remains accepted for compatibility,
 but a new deployment should use the admin name. The optional submit token is
 useful for private installations; a public community queue can leave it empty
-and enforce per-client rate limits at the edge. The service also applies a
-privacy-preserving global request limit without retaining source addresses.
+and enforce per-client rate limits at the edge. The service also applies
+privacy-preserving global limits without retaining source addresses: 60
+submissions per minute and 500 per UTC calendar day by default. The daily
+counter is intentionally in-memory and resets when the process restarts; it is
+a backstop, not a replacement for edge limiting.
 
 An empty admin token always keeps report submission disabled at server startup.
 The service never stores client IP addresses, user-agent strings, account
@@ -77,7 +82,10 @@ limiting:
 ```dotenv
 COMMAND_PREFLIGHT_ALLOW_REPORT=true
 COMMAND_PREFLIGHT_ADMIN_TOKEN=<long-random-value>
+COMMAND_PREFLIGHT_REPORTS_PER_MINUTE=60
+COMMAND_PREFLIGHT_REPORTS_PER_DAY=500
 COMMAND_PREFLIGHT_REPORT_RETENTION_DAYS=30
+COMMAND_PREFLIGHT_PENDING_RETENTION_DAYS=7
 ```
 
 A client with explicit reporting enabled submits a constrained payload:
@@ -115,9 +123,11 @@ curl -fsS -X POST \
 Review decisions can be `approve`, `reject`, or `hold`. Publishing promotes
 only approved reports and marks their fixes `community-reviewed`. Rejected and
 published queue records are pruned on startup and daily after the configured
-retention period;
-published knowledge remains available. An authenticated operator can delete an
-individual queue record with `DELETE /v1/admin/reports/{id}`; this also leaves
+terminal retention period. Pending, held, and approved-but-not-published
+records are separately removed after `COMMAND_PREFLIGHT_PENDING_RETENTION_DAYS`
+so abandoned work cannot fill the queue. Published knowledge remains available;
+an authenticated operator can delete an individual queue record with
+`DELETE /v1/admin/reports/{id}`; this also leaves
 any previously published knowledge intact.
 
 The queue is intentionally model-agnostic. An operator can inspect the
@@ -154,3 +164,22 @@ COMMAND_PREFLIGHT_REPORT_URL=https://preflight.52131415.xyz
 The `submit_resolution` tool appears only with that explicit switch. The model
 should call it after a fix is verified, sending only the public fingerprint and
 redacted summary/verification. A failed upload never blocks local execution.
+
+## Container and edge boundary
+
+The Compose service runs as UID `65532` with a read-only root filesystem,
+all Linux capabilities dropped, `no-new-privileges`, PID/memory/CPU limits,
+and a non-executable temporary filesystem. Its dedicated Docker bridge disables
+IP masquerading and inter-container forwarding: the explicitly published host
+port can reach it, while ordinary Internet connections from the container do
+not have a routable NAT path. This is a defense-in-depth boundary, not a
+replacement for the application schema and host firewall. Keep the host port
+bound to a private Tailnet address when using a Cloudflare Tunnel.
+
+For a public deployment, configure the edge to redirect HTTP to HTTPS and
+rate-limit `POST /v1/reports` by source IP. Cloudflare's Free plan permits a
+10-second rate-limit period, so the reference deployment allows one request per
+IP per edge colo per 10 seconds (approximately six per minute per colo) with a
+10-second mitigation. The application-wide 60-per-minute and 500-per-day caps
+remain the cross-colo backstop. Keep `/v1/admin/*` on localhost/Tailnet; the
+application also rejects forwarded admin requests by default.

@@ -14,14 +14,33 @@ services:
       COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN: ${COMMAND_PREFLIGHT_REPORT_SUBMIT_TOKEN:-}
       COMMAND_PREFLIGHT_ALLOW_PROXIED_ADMIN: ${COMMAND_PREFLIGHT_ALLOW_PROXIED_ADMIN:-false}
       COMMAND_PREFLIGHT_REPORTS_PER_MINUTE: ${COMMAND_PREFLIGHT_REPORTS_PER_MINUTE:-60}
+      COMMAND_PREFLIGHT_REPORTS_PER_DAY: ${COMMAND_PREFLIGHT_REPORTS_PER_DAY:-500}
       COMMAND_PREFLIGHT_REPORT_RETENTION_DAYS: ${COMMAND_PREFLIGHT_REPORT_RETENTION_DAYS:-30}
+      COMMAND_PREFLIGHT_PENDING_RETENTION_DAYS: ${COMMAND_PREFLIGHT_PENDING_RETENTION_DAYS:-7}
     ports:
       - "${COMMAND_PREFLIGHT_PUBLISHED_BIND:-127.0.0.1:8787}:8787"
     volumes:
       - ${COMMAND_PREFLIGHT_DATA_VOLUME:-command-preflight-data}:/data
     read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
     tmpfs:
-      - /tmp
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    networks:
+      - command-preflight
+
+networks:
+  command-preflight:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "false"
 
 volumes:
   command-preflight-data:

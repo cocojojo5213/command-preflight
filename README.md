@@ -114,7 +114,7 @@ docker compose up -d --build
 curl -fsS http://127.0.0.1:8787/healthz
 ```
 
-The Compose setup binds to localhost, stores data in a Docker named volume, and disables report submission by default. Put a TLS-terminating reverse proxy or Cloudflare Tunnel in front of it before exposing it to a network. To deliberately change the container listen address, copy `.env.example` to `.env` and set `COMMAND_PREFLIGHT_BIND`; to publish only on a private Tailnet interface, set `COMMAND_PREFLIGHT_PUBLISHED_BIND` to that IP and port. Do not expose the moderation API without a strong admin token and a private access boundary. A host bind mount can be selected with `COMMAND_PREFLIGHT_DATA_VOLUME=./data` (the directory must be writable by container UID `65532`).
+The Compose setup binds to localhost, stores data in a Docker named volume, and disables report submission by default. The container is non-root, read-only, capability-free, resource-limited, and runs on a dedicated bridge without IP masquerading or inter-container forwarding. Put a TLS-terminating reverse proxy or Cloudflare Tunnel in front of it before exposing it to a network. To deliberately change the container listen address, copy `.env.example` to `.env` and set `COMMAND_PREFLIGHT_BIND`; to publish only on a private Tailnet interface, set `COMMAND_PREFLIGHT_PUBLISHED_BIND` to that IP and port. Do not expose the moderation API without a strong admin token and a private access boundary. A host bind mount can be selected with `COMMAND_PREFLIGHT_DATA_VOLUME=./data` (the directory must be writable by container UID `65532`). Public reporting also has global per-minute and per-UTC-day caps, but a public edge rate limiter remains required.
 
 Lookups contain only a public fingerprint ID:
 
