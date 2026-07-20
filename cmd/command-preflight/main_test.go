@@ -44,7 +44,7 @@ func TestSetupCommandWithKnowledgeURL(t *testing.T) {
 		t.Fatalf("codex connected setup command = %#v, want %#v", got, want)
 	}
 
-	want = []string{"mcp", "add", "--scope", "user", "--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL=" + url, "command-preflight", "--", executable, "mcp"}
+	want = []string{"mcp", "add", "--scope", "user", "command-preflight", "--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL=" + url, "--", executable, "mcp"}
 	if got := setupCommand("claude", executable, url); !reflect.DeepEqual(got, want) {
 		t.Fatalf("claude connected setup command = %#v, want %#v", got, want)
 	}

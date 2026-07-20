@@ -350,10 +350,11 @@ func setupCommand(client, executable, knowledgeURL string) []string {
 		args = append(args, "command-preflight", "--", executable, "mcp")
 	case "claude":
 		args = append(args, "--scope", "user")
+		args = append(args, "command-preflight")
 		if knowledgeURL != "" {
 			args = append(args, "--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL="+knowledgeURL)
 		}
-		args = append(args, "command-preflight", "--", executable, "mcp")
+		args = append(args, "--", executable, "mcp")
 	}
 	return args
 }
