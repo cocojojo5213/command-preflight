@@ -19,11 +19,14 @@ Copy `.env.example` to `.env` when changing the defaults:
 COMMAND_PREFLIGHT_BIND=0.0.0.0:8787
 COMMAND_PREFLIGHT_DATA=/data/knowledge.json
 COMMAND_PREFLIGHT_DATA_VOLUME=command-preflight-data
+COMMAND_PREFLIGHT_PUBLISHED_BIND=127.0.0.1:8787
 COMMAND_PREFLIGHT_ALLOW_REPORT=false
 COMMAND_PREFLIGHT_REPORT_TOKEN=
 ```
 
 Environment variables are read by the Compose service. The default data volume is initialized for the non-root container user. If you select a host bind mount instead, make it writable by UID `65532`. An empty report token always leaves reporting disabled.
+
+For a private remote test over Tailscale, set `COMMAND_PREFLIGHT_PUBLISHED_BIND` to the host's Tailnet address, for example `100.88.75.16:8787`. Do not bind a new public interface without TLS and access controls.
 
 ## Lookup
 

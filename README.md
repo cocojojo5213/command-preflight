@@ -70,7 +70,7 @@ docker compose up -d --build
 curl -fsS http://127.0.0.1:8787/healthz
 ```
 
-The Compose setup binds to localhost, stores data in a Docker named volume, and disables writes to the knowledge API. Put a TLS-terminating reverse proxy in front of it before exposing it to a network. To deliberately change the bind address, copy `.env.example` to `.env` and set `COMMAND_PREFLIGHT_BIND`; do not expose an unauthenticated instance directly to the Internet. A host bind mount can be selected with `COMMAND_PREFLIGHT_DATA_VOLUME=./data` (the directory must be writable by container UID `65532`).
+The Compose setup binds to localhost, stores data in a Docker named volume, and disables writes to the knowledge API. Put a TLS-terminating reverse proxy in front of it before exposing it to a network. To deliberately change the container listen address, copy `.env.example` to `.env` and set `COMMAND_PREFLIGHT_BIND`; to publish only on a private Tailnet interface, set `COMMAND_PREFLIGHT_PUBLISHED_BIND` to that IP and port. Do not expose an unauthenticated instance directly to the Internet. A host bind mount can be selected with `COMMAND_PREFLIGHT_DATA_VOLUME=./data` (the directory must be writable by container UID `65532`).
 
 Lookups contain only a public fingerprint ID:
 

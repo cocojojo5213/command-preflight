@@ -10,7 +10,7 @@ services:
       - --allow-report=${COMMAND_PREFLIGHT_ALLOW_REPORT:-false}
       - --report-token=${COMMAND_PREFLIGHT_REPORT_TOKEN:-}
     ports:
-      - "127.0.0.1:8787:8787"
+      - "${COMMAND_PREFLIGHT_PUBLISHED_BIND:-127.0.0.1:8787}:8787"
     volumes:
       - ${COMMAND_PREFLIGHT_DATA_VOLUME:-command-preflight-data}:/data
     read_only: true
