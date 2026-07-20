@@ -1,6 +1,8 @@
 package cloud
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,4 +63,43 @@ func TestServerLookupAndReportAuth(t *testing.T) {
 		t.Fatalf("unauthorized report status = %d", response.StatusCode)
 	}
 	response.Body.Close()
+}
+
+func TestClientLookup(t *testing.T) {
+	entry := testEntry()
+	testServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/knowledge/"+entry.Fingerprint.ID {
+			t.Fatalf("lookup path = %s", request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(entry)
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(testServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := client.Lookup(context.Background(), entry.Fingerprint.ID)
+	if err != nil || !found || got.Fingerprint.ID != entry.Fingerprint.ID {
+		t.Fatalf("lookup = %+v, found=%t, err=%v", got, found, err)
+	}
+}
+
+func TestClientLookupNotFound(t *testing.T) {
+	testServer := httptest.NewServer(http.NotFoundHandler())
+	defer testServer.Close()
+	client, err := NewClient(testServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := client.Lookup(context.Background(), "cp1-0123456789abcdef0123"); err != nil || found {
+		t.Fatalf("not found lookup = found=%t, err=%v", found, err)
+	}
+}
+
+func TestClientRejectsSecretURL(t *testing.T) {
+	if _, err := NewClient("https://user:pass@example.test/knowledge?token=secret"); err == nil {
+		t.Fatal("expected URL validation error")
+	}
 }

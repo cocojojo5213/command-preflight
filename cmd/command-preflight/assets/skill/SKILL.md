@@ -11,7 +11,7 @@ Use the local `command-preflight` binary or its MCP tools as a lightweight guard
 2. For an unfamiliar subcommand or flag, resolve the executable and read the exact local help before guessing. A syntax parser cannot validate every CLI grammar.
 3. Run `command-preflight preflight --shell <shell> --command <text> --cwd <dir> --json` for complex quoting, interpolation, pipes, redirection, dynamic command names, or high-risk effects. Use the `preflight_command` MCP tool when available.
 4. Treat `review` as a pause for manual inspection, not as success. Inspect exact targets before delete, overwrite, publish, deploy, migration, permission, or process-kill operations.
-5. After a command fails, classify the first error and do not retry the identical text. Create a local fingerprint with `command-preflight fingerprint` or `fingerprint_command_error`, then use a configured knowledge lookup if one exists.
+5. After a command fails, classify the first error and do not retry the identical text. Create a local fingerprint with `command-preflight fingerprint` or `fingerprint_command_error`, then use `command-preflight lookup` or the `lookup_fingerprint` MCP tool when an opt-in knowledge URL is configured.
 6. Validate the task-specific postcondition after execution. An exit code of zero is not proof that the intended artifact exists.
 
 Keep telemetry disabled unless the user explicitly enables a compatible, privacy-reviewed endpoint. Never send raw commands, environment variables, paths, or unredacted output to a remote service.

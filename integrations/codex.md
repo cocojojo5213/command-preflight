@@ -20,4 +20,4 @@ Install the bundled Skill into the global skill directory when you want the mode
 command-preflight install-skill --target codex
 ```
 
-The MVP client is local-only. It does not add a network endpoint or upload command data. An optional self-hosted knowledge service is documented in [docs/cloud.md](../docs/cloud.md); it is not required for MCP operation.
+The default client is local-only. It does not add a network endpoint or upload command data. An optional self-hosted knowledge lookup is documented in [docs/cloud.md](../docs/cloud.md); set `COMMAND_PREFLIGHT_KNOWLEDGE_URL` explicitly to enable it, and it sends only fingerprint IDs.

@@ -55,4 +55,11 @@ curl -fsS -X PUT \
 
 ## Client lookup
 
-The local client remains usable without the service. A future opt-in lookup adapter should send only a `PublicFingerprint` ID and receive a compact, provenance-bearing result. Cloud failure must never block local command execution.
+The local client remains usable without the service. Set the URL explicitly to enable a read-only lookup:
+
+```bash
+export COMMAND_PREFLIGHT_KNOWLEDGE_URL=https://knowledge.example.test
+command-preflight lookup --fingerprint-id cp1-0123456789abcdef0123 --json
+```
+
+MCP clients get the same opt-in capability as `lookup_fingerprint`. Only the public fingerprint ID is sent, and a lookup failure never blocks local command execution. Reporting/upload is not enabled by this client.

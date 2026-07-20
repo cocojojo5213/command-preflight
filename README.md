@@ -78,7 +78,14 @@ Lookups contain only a public fingerprint ID:
 curl -fsS http://127.0.0.1:8787/v1/knowledge/cp1-0123456789abcdef0123
 ```
 
-The authenticated `PUT` endpoint is for operator-curated seed data, not anonymous uploads. The current client does not send commands, environment variables, or terminal output to this service. Automatic opt-in lookup/report adapters are intentionally a follow-up feature and must preserve this contract.
+Enable a local lookup explicitly by setting the URL (the default remains offline):
+
+```bash
+export COMMAND_PREFLIGHT_KNOWLEDGE_URL=http://127.0.0.1:8787
+command-preflight lookup --fingerprint-id cp1-0123456789abcdef0123 --json
+```
+
+The lookup sends only the `cp1-...` ID. It never sends commands, environment variables, paths, or terminal output. The authenticated `PUT` endpoint is for operator-curated seed data, not anonymous uploads; automatic reporting remains disabled in this release.
 
 ## Development
 

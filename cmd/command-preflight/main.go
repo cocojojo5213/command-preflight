@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/cocojojo5213/command-preflight/internal/cloud"
 	"github.com/cocojojo5213/command-preflight/internal/core"
 	"github.com/cocojojo5213/command-preflight/internal/mcp"
 )
@@ -38,6 +40,8 @@ func main() {
 		exitCode = runPreflight(os.Args[2:])
 	case "fingerprint":
 		exitCode = runFingerprint(os.Args[2:])
+	case "lookup":
+		exitCode = runLookup(os.Args[2:])
 	case "mcp":
 		if err := mcp.Serve(os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "command-preflight mcp: %v\n", err)
@@ -145,11 +149,53 @@ func runFingerprint(args []string) int {
 	return 0
 }
 
+func runLookup(args []string) int {
+	fs := flag.NewFlagSet("lookup", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	knowledgeURL := os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL")
+	fingerprintID := ""
+	jsonOutput := true
+	fs.StringVar(&knowledgeURL, "url", knowledgeURL, "knowledge service URL (or COMMAND_PREFLIGHT_KNOWLEDGE_URL)")
+	fs.StringVar(&fingerprintID, "fingerprint-id", fingerprintID, "public cp1 fingerprint ID")
+	fs.BoolVar(&jsonOutput, "json", true, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	client, err := cloud.NewClient(knowledgeURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configure knowledge lookup: %v\n", err)
+		return 2
+	}
+	entry, found, err := client.Lookup(context.Background(), fingerprintID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "knowledge lookup: %v\n", err)
+		return 1
+	}
+	result := map[string]interface{}{"fingerprint_id": fingerprintID, "found": found}
+	if found {
+		result["entry"] = entry
+	}
+	if jsonOutput {
+		return writeJSON(result)
+	}
+	if !found {
+		fmt.Printf("No knowledge entry for %s\n", fingerprintID)
+		return 0
+	}
+	fmt.Printf("Knowledge entry found for %s (%d fix(es))\n", fingerprintID, len(entry.Fixes))
+	return 0
+}
+
 func runDoctor() int {
 	fmt.Printf("version: %s\n", core.Version)
 	fmt.Printf("runtime: %s\n", core.RuntimeSummary())
 	fmt.Printf("default shell: %s\n", defaultShell())
 	fmt.Println("telemetry: disabled (local-only MVP)")
+	if strings.TrimSpace(os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL")) == "" {
+		fmt.Println("knowledge lookup: disabled (offline)")
+	} else {
+		fmt.Println("knowledge lookup: opt-in (fingerprint IDs only)")
+	}
 	fmt.Println("mcp: run `command-preflight mcp` over stdio")
 	if _, err := os.Stat("."); err != nil {
 		fmt.Printf("cwd: unavailable (%v)\n", err)
@@ -340,6 +386,7 @@ func printUsage(writer io.Writer) {
 Usage:
   command-preflight preflight --shell <shell> --command <text> [--cwd <dir>] [--json]
   command-preflight fingerprint --shell <shell> --command <text> --stderr <text> [--json]
+  command-preflight lookup --fingerprint-id <cp1-...> [--url <https://...>] [--json]
   command-preflight mcp
   command-preflight doctor
   command-preflight install-skill --target codex|claude|both
