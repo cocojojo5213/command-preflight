@@ -36,7 +36,14 @@ tar -xzf "${temporary_dir}/${asset}" -C "$temporary_dir/unpack"
 install -m 0755 "${temporary_dir}/unpack/command-preflight" "${prefix}/command-preflight"
 
 "${prefix}/command-preflight" install-skill --target both
+
+if ! "${prefix}/command-preflight" setup --client both --apply; then
+  printf '%s\n' 'Binary installed, but automatic MCP registration needs to be completed manually.' >&2
+fi
 printf '\nInstalled %s/command-preflight\n' "$prefix"
-printf '%s\n' 'Register MCP when ready:'
-printf '%s\n' "  ${prefix}/command-preflight setup --client both --apply"
+if [ -n "${COMMAND_PREFLIGHT_KNOWLEDGE_URL:-}" ]; then
+  printf '%s\n' "Opt-in knowledge lookup configured for: ${COMMAND_PREFLIGHT_KNOWLEDGE_URL}"
+else
+  printf '%s\n' 'Knowledge lookup remains offline (set COMMAND_PREFLIGHT_KNOWLEDGE_URL to opt in).'
+fi
 printf '%s\n' 'If the command is not found, add the prefix to PATH for your shell.'

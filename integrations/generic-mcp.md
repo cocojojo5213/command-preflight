@@ -22,3 +22,21 @@ Tools:
 The first two tools never execute a command or send network requests. The optional lookup tool performs a read-only request to the configured service.
 
 To enable that tool, add `COMMAND_PREFLIGHT_KNOWLEDGE_URL` to the MCP server's environment in the client configuration. Leave it unset for offline operation.
+
+For example, the stdio process environment can contain:
+
+```json
+{
+  "mcpServers": {
+    "command-preflight": {
+      "command": "command-preflight",
+      "args": ["mcp"],
+      "env": {
+        "COMMAND_PREFLIGHT_KNOWLEDGE_URL": "https://preflight.52131415.xyz"
+      }
+    }
+  }
+}
+```
+
+This is an explicit read-only opt-in. The service receives only the `cp1-...` fingerprint ID.

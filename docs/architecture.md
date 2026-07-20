@@ -22,10 +22,10 @@ The binary is intentionally inspection-only. A separate agent or shell tool rema
 The same repository can build a hosted knowledge service. The service should accept only the normalized fingerprint contract, never raw command text or environment data. The local client remains functional when the service is unavailable.
 
 ```text
-local hook -> redact + fingerprint -> local cache -> optional HTTPS lookup/report
-                                                   |
-                                                   v
-                                      versioned error knowledge store
+local hook -> redact + fingerprint -> optional HTTPS lookup
+                                      |
+                                      v
+                         versioned error knowledge store
 ```
 
 Cloud responses must include the supported shell/tool version, confidence, provenance, and a local verification step. They must not be treated as executable instructions.

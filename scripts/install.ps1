@@ -17,11 +17,26 @@ try {
     Invoke-WebRequest -Uri "https://github.com/$repository/releases/latest/download/$asset" -OutFile $archive
     Expand-Archive -LiteralPath $archive -DestinationPath $temporaryDirectory -Force
     Copy-Item -LiteralPath (Join-Path $temporaryDirectory 'command-preflight.exe') -Destination (Join-Path $installDirectory 'command-preflight.exe') -Force
-    & (Join-Path $installDirectory 'command-preflight.exe') install-skill --target both
+    $executable = Join-Path $installDirectory 'command-preflight.exe'
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $pathParts = @($userPath -split ';' | Where-Object { $_ })
+    if ($pathParts -notcontains $installDirectory) {
+        [Environment]::SetEnvironmentVariable('Path', (($pathParts + $installDirectory) -join ';'), 'User')
+    }
+    $env:Path = "$installDirectory;$env:Path"
+    & $executable install-skill --target both
+    & $executable setup --client both --apply
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning 'The binary was installed, but automatic MCP registration needs to be rerun after checking the client CLI.'
+    }
     Write-Host "Installed $installDirectory\command-preflight.exe"
-    Write-Host 'Register MCP when ready:'
-    Write-Host "  & '$installDirectory\command-preflight.exe' setup --client both --apply"
-    Write-Host 'Add the install directory to PATH if command-preflight is not recognized.'
+    if ($env:COMMAND_PREFLIGHT_KNOWLEDGE_URL) {
+        Write-Host "Opt-in knowledge lookup configured for: $env:COMMAND_PREFLIGHT_KNOWLEDGE_URL"
+    }
+    else {
+        Write-Host 'Knowledge lookup remains offline (set COMMAND_PREFLIGHT_KNOWLEDGE_URL to opt in).'
+    }
+    Write-Host 'Open a new terminal before using command-preflight.'
 }
 finally {
     Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue

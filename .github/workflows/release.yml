@@ -31,7 +31,9 @@ jobs:
             if [ "$os" = windows ]; then suffix=".exe"; fi
             GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.buildVersion=${version}" -o "${output}/command-preflight${suffix}" ./cmd/command-preflight
             if [ "$os" = windows ]; then
-              (cd "$output" && zip -q "../${asset}.zip" "command-preflight${suffix}")
+              cp scripts/INSTALL.cmd "${output}/INSTALL.cmd"
+              cp scripts/README-WINDOWS.txt "${output}/README.txt"
+              (cd "$output" && zip -q "../${asset}.zip" "command-preflight${suffix}" INSTALL.cmd README.txt)
             else
               tar -czf "dist/${asset}.tar.gz" -C "$output" command-preflight
             fi

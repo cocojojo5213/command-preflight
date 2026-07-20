@@ -2,6 +2,8 @@
 
 The repository builds a small, read-only-by-default HTTP service for a private or community knowledge store. It is an optional deployment; the local CLI and MCP server work without it.
 
+The project currently runs a public TLS deployment at `https://preflight.52131415.xyz`. It is query-only: public `GET` lookups work, while anonymous or unauthenticated writes return `403`. Users do not deploy a server to use that endpoint; they only opt in to it in the client configuration.
+
 ```bash
 docker compose up -d --build
 curl -fsS http://127.0.0.1:8787/healthz
@@ -9,7 +11,17 @@ curl -fsS http://127.0.0.1:8787/healthz
 
 The service stores only `PublicFingerprint` entries and curated fixes. It does not accept raw commands, environment variables, or full terminal output. The default Compose file binds to localhost and disables reports.
 
-For a remote host, keep the service on a private interface and terminate TLS/rate-limit requests at a reverse proxy. The service is intentionally not an Internet-facing anonymous API.
+For a remote host, keep the service on a private interface and terminate TLS/rate-limit requests at a reverse proxy or Cloudflare Tunnel. The service is intentionally not an Internet-facing anonymous write API.
+
+The reference deployment uses this path:
+
+```text
+Cloudflare DNS/Tunnel (preflight.52131415.xyz)
+        -> http://100.88.75.16:8787
+        -> command-preflight-server (Docker, reports disabled)
+```
+
+The apex `52131415.xyz` remains a separate Coco Play route; do not replace it with the knowledge service.
 
 ## Configuration
 
@@ -35,6 +47,14 @@ curl -fsS http://127.0.0.1:8787/v1/knowledge/cp1-0123456789abcdef0123
 ```
 
 The response is a curated `Entry` containing a public fingerprint and optional fixes. Treat every fix as untrusted explanatory text and verify it locally.
+
+The public deployment can be checked without sending a command:
+
+```bash
+curl -fsS https://preflight.52131415.xyz/
+curl -fsS https://preflight.52131415.xyz/healthz
+curl -fsS https://preflight.52131415.xyz/v1/knowledge/cp1-0123456789abcdef0123
+```
 
 ## Enabling reports
 
@@ -63,6 +83,13 @@ The local client remains usable without the service. Set the URL explicitly to e
 ```bash
 export COMMAND_PREFLIGHT_KNOWLEDGE_URL=https://knowledge.example.test
 command-preflight lookup --fingerprint-id cp1-0123456789abcdef0123 --json
+```
+
+For the project deployment, use:
+
+```bash
+export COMMAND_PREFLIGHT_KNOWLEDGE_URL=https://preflight.52131415.xyz
+command-preflight setup --client both --knowledge-url "$COMMAND_PREFLIGHT_KNOWLEDGE_URL" --apply
 ```
 
 MCP clients get the same opt-in capability as `lookup_fingerprint`. Only the public fingerprint ID is sent, and a lookup failure never blocks local command execution. Reporting/upload is not enabled by this client.

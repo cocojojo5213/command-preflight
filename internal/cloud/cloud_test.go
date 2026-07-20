@@ -65,6 +65,62 @@ func TestServerLookupAndReportAuth(t *testing.T) {
 	response.Body.Close()
 }
 
+func TestServerIndex(t *testing.T) {
+	server := &Server{Store: mustTestStore(t)}
+	testServer := httptest.NewServer(server.Handler())
+	defer testServer.Close()
+
+	response, err := http.Get(testServer.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("index status = %d", response.StatusCode)
+	}
+	if got := response.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("content type options header = %q", got)
+	}
+	var body struct {
+		Service          string `json:"service"`
+		Access           string `json:"access"`
+		ReportingEnabled bool   `json:"reporting_enabled"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Service != "command-preflight-knowledge" || body.Access != "read-only-lookups" || body.ReportingEnabled {
+		t.Fatalf("unexpected index response: %+v", body)
+	}
+
+	head, err := http.Head(testServer.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer head.Body.Close()
+	if head.StatusCode != http.StatusOK {
+		t.Fatalf("health HEAD status = %d", head.StatusCode)
+	}
+
+	unknown, err := http.Get(testServer.URL + "/unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unknown.Body.Close()
+	if unknown.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown path status = %d", unknown.StatusCode)
+	}
+}
+
+func mustTestStore(t *testing.T) *Store {
+	t.Helper()
+	store, err := OpenStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
 func TestClientLookup(t *testing.T) {
 	entry := testEntry()
 	testServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

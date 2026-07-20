@@ -30,8 +30,16 @@ var embeddedSkillMetadata []byte
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage(os.Stderr)
-		os.Exit(2)
+		printUsage(os.Stdout)
+		if runtime.GOOS == "windows" && interactiveStdin() {
+			fmt.Fprintln(os.Stdout)
+			fmt.Fprintln(os.Stdout, "This is a command-line tool, not a graphical app.")
+			fmt.Fprintln(os.Stdout, "For one-click Windows setup, run INSTALL.cmd from the release archive.")
+			fmt.Fprintln(os.Stdout, "Documentation: https://github.com/cocojojo5213/command-preflight")
+			fmt.Fprintln(os.Stdout, "Press Enter to close this window.")
+			_, _ = fmt.Scanln()
+		}
+		return
 	}
 
 	var exitCode int
@@ -222,7 +230,7 @@ func runInstallSkill(args []string) int {
 		return 1
 	}
 	paths := map[string]string{
-		"codex":  filepath.Join(home, ".agents", "skills", "command-preflight"),
+		"codex":  codexSkillDirectory(home),
 		"claude": filepath.Join(home, ".claude", "skills", "command-preflight"),
 	}
 	var targets []string
@@ -260,15 +268,33 @@ func runInstallSkill(args []string) int {
 	return 0
 }
 
+func codexSkillDirectory(home string) string {
+	if override := strings.TrimSpace(os.Getenv("COMMAND_PREFLIGHT_CODEX_SKILL_DIR")); override != "" {
+		return filepath.Join(override, "command-preflight")
+	}
+	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
+		return filepath.Join(codexHome, "skills", "command-preflight")
+	}
+	return filepath.Join(home, ".codex", "skills", "command-preflight")
+}
+
 func runSetup(args []string) int {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	client := "both"
+	knowledgeURL := os.Getenv("COMMAND_PREFLIGHT_KNOWLEDGE_URL")
 	apply := false
 	fs.StringVar(&client, "client", client, "client: codex, claude, or both")
+	fs.StringVar(&knowledgeURL, "knowledge-url", knowledgeURL, "opt-in read-only knowledge URL (also COMMAND_PREFLIGHT_KNOWLEDGE_URL)")
 	fs.BoolVar(&apply, "apply", false, "apply the MCP configuration instead of only printing it")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if strings.TrimSpace(knowledgeURL) != "" {
+		if _, err := cloud.NewClient(knowledgeURL); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid knowledge URL: %v\n", err)
+			return 2
+		}
 	}
 	executable, err := os.Executable()
 	if err != nil {
@@ -285,15 +311,10 @@ func runSetup(args []string) int {
 		fmt.Fprintf(os.Stderr, "unsupported client %q\n", client)
 		return 2
 	}
+	configured := 0
 	for _, name := range clients {
-		var args []string
-		switch name {
-		case "codex":
-			args = []string{"mcp", "add", "command-preflight", "--", executable, "mcp"}
-		case "claude":
-			args = []string{"mcp", "add", "--scope", "user", "command-preflight", "--", executable, "mcp"}
-		}
-		fmt.Printf("%s: %s %s\n", name, name, shellJoin(args))
+		mcpArgs := setupCommand(name, executable, knowledgeURL)
+		fmt.Printf("%s: %s %s\n", name, name, shellJoin(mcpArgs))
 		if !apply {
 			continue
 		}
@@ -301,18 +322,40 @@ func runSetup(args []string) int {
 			fmt.Fprintf(os.Stderr, "%s is not installed: %v\n", name, err)
 			continue
 		}
-		command := exec.Command(name, args...)
+		command := exec.Command(name, mcpArgs...)
 		command.Stdout = os.Stdout
 		command.Stderr = os.Stderr
 		if err := command.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "configure %s: %v\n", name, err)
 			return 1
 		}
+		configured++
 	}
 	if !apply {
 		fmt.Println("dry run only; add --apply to change client configuration")
+	} else if configured == 0 {
+		fmt.Fprintln(os.Stderr, "no supported client CLI was found; install Codex or Claude Code, then rerun setup")
+		return 1
 	}
 	return 0
+}
+
+func setupCommand(client, executable, knowledgeURL string) []string {
+	args := []string{"mcp", "add"}
+	switch client {
+	case "codex":
+		if knowledgeURL != "" {
+			args = append(args, "--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL="+knowledgeURL)
+		}
+		args = append(args, "command-preflight", "--", executable, "mcp")
+	case "claude":
+		args = append(args, "--scope", "user")
+		if knowledgeURL != "" {
+			args = append(args, "--env", "COMMAND_PREFLIGHT_KNOWLEDGE_URL="+knowledgeURL)
+		}
+		args = append(args, "command-preflight", "--", executable, "mcp")
+	}
+	return args
 }
 
 func shellJoin(args []string) string {
@@ -332,6 +375,11 @@ func defaultShell() string {
 		return "powershell"
 	}
 	return "bash"
+}
+
+func interactiveStdin() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func statusExitCode(status string) int {
@@ -390,7 +438,7 @@ Usage:
   command-preflight mcp
   command-preflight doctor
   command-preflight install-skill --target codex|claude|both
-  command-preflight setup --client codex|claude|both [--apply]
+  command-preflight setup --client codex|claude|both [--knowledge-url <https://...>] [--apply]
   command-preflight version
 
 The MVP never executes the command being checked and keeps telemetry disabled.
